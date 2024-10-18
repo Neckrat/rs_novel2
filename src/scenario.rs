@@ -1,32 +1,35 @@
-use bevy::{input::common_conditions::input_just_pressed, prelude::*};
+use bevy::prelude::*;
 use serde_json::*;
 use serde::*;
 
-use std::fs;
+use std:: fs;
 
-use crate::characters::*;
+use crate::{characters::*, next_tree_node, choice::*};
 
 
-#[derive(Deserialize, Serialize, Debug)]
-struct Heading {
-    music: String,
-    image: String,
-    scenario: Scenario,
-}
+// #[derive(Deserialize, Serialize, Debug)]
+// pub struct Heading {
+//     music: String,
+//     image: String,
+//     scenario: Scenario,
+//     pub choice: String
+// }
 
 #[derive(Deserialize, Serialize, Debug, Resource, Default)]
-pub struct Scenario {
-    pub id: u8,
-    pub name: String,
-    pub txt: String,
-    pub image: String
+struct Scenario {
+    id: u8,
+    name: String,
+    txt: String,
+    image: String,
 }
 
 #[derive(Resource, Default)]
 pub struct ScenarioPoint{
     pub point: usize,
     pub tree: String,
-    pub len: usize
+    pub len: usize,
+    pub choice: bool,
+    pub showing: bool,
 }
 
 pub struct ScenarioPlugin;
@@ -35,14 +38,36 @@ impl Plugin for ScenarioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Scenario>();
         app.init_resource::<ScenarioPoint>();
-        app.add_systems(Update, scenario_len);
-        app.add_systems(Update, (scenario_block, scenario, increment_scn_point, dialog_box).chain()
-            .run_if(input_just_pressed(KeyCode::Space)));
+        app.add_systems(Update, (
+            scenario_len,
+            increment_scn_point.run_if(run_if_is_not_choice),
+            next_tree_node,
+            (
+                scenario_block,       
+                scenario, 
+                dialog_box
+            )
+            .chain()
+            .run_if(run_if_is_not_choice),
+            // Множество систем если кол-во ветвей в дереве равняется единице
+            (
+                (
+                    set_choices, 
+                    show_choices
+                )
+                .chain()
+                .run_if(run_if_is_showing),
+                wait_for_input
+            )
+            .chain()
+            .run_if(run_if_is_choice)
+            // Множество систем если кол-во ветвей в дереве больше единицы
+        ).chain());
     }
 }
 
-
-fn scenario_block(mut scenario_point: ResMut<ScenarioPoint>, mut scenario: ResMut<Scenario>) {
+// Берёт информацию из JSON'a о следующей фразе, и передаёт её Res<Scenario> 
+fn scenario_block(scenario_point: Res<ScenarioPoint>, mut scenario: ResMut<Scenario>) {
     let res = fs::read_to_string(format!("assets/scenario/{}.json", scenario_point.tree))
         .expect("cant read file");
     
@@ -61,11 +86,9 @@ fn scenario_block(mut scenario_point: ResMut<ScenarioPoint>, mut scenario: ResMu
     scenario.name = scn.name;
     scenario.txt = scn.txt;
     scenario.image = scn.image;
-
-    scenario_point.len = scn_point.len();
 }
 
-fn scenario_len(mut scenario_point: ResMut<ScenarioPoint>) {
+pub fn scenario_len(mut scenario_point: ResMut<ScenarioPoint>) {
     let res = fs::read_to_string(format!("assets/scenario/{}.json", scenario_point.tree))
         .expect("cant read file");
 
@@ -85,19 +108,21 @@ fn scenario(mut query_chr: Query<&mut Character>, scenario: Res<Scenario>) {
     }
 }
 
-fn increment_scn_point(mut scenario_point: ResMut<ScenarioPoint>) {
-    if scenario_point.len > scenario_point.point {
+pub fn increment_scn_point(mut scenario_point: ResMut<ScenarioPoint>, keys: Res<ButtonInput<KeyCode>>) {
+    if scenario_point.len > scenario_point.point && keys.just_pressed(KeyCode::Space) {
         scenario_point.point += 1;
     }
 }
 
-fn dialog_box(query_chr: Query<&Character>, scenario: Res<Scenario>) {
+fn dialog_box(query_chr: Query<&Character>, scenario: Res<Scenario>, 
+    keys: Res<ButtonInput<KeyCode>>, mut scenario_point: ResMut<ScenarioPoint>) {
     for chr in &query_chr {
-        if scenario.id == chr.id {
+        if scenario.id == chr.id && (keys.just_pressed(KeyCode::Space) || scenario_point.showing) {
             println!("\n\n{}\n\n", chr.image);
             println!("{}", chr.name);
             println!("---------------------------------");
             println!("{}", chr.txt);
+            scenario_point.showing = false;
         }
     }
 }
